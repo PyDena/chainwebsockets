@@ -8,24 +8,17 @@ import networkx as nx
 import matplotlib as plt
 from matplotlib import pyplot as plt
 from pyvis.network import Network
+from pydantic import BaseModel
+import community as community_louvain
+
 chainweb_node_structure_url = "https://estats.chainweb.com/info"
 block_keys = ["height", "hash", "chainId", "totalTransactions", "creationTime"]
 tx_keys = ["requestKey", "chainId", "status", "timestamp", "fromAccount", "toAccount"]
+max_nodes = 50000
 
-
-from pydantic import BaseModel
-
-
-
-
-class Block(BaseModel):
-    height: int
-    hash: str
-    chainId: int
-    totalTransactions: int
-    creationTime: int
 
 class Transaction(BaseModel):
+    tx_id: str | None = None
     requestKey: str
     chainId: int
     status: str
@@ -34,91 +27,228 @@ class Transaction(BaseModel):
     toAccount: str
 
 
+class Block(BaseModel):
+    block_id: str | None = None
+    height: int
+    hash: str
+    chainId: int
+    totalTransactions: int
+    creationTime: int
+    transactions: list[Transaction] = []
+    has_live_neighbors: bool = False
+
+
 class ChainWebInfo(BaseModel):
     nodeApiVersion: float
     nodeChains: list[int]
-    nodeGraphHistory: list[list[int|list[list[int|list[int]]]]]
+    nodeGraphHistory: list[list[int | list[list[int | list[int]]]]]
     nodeLatestBehaviorHeight: int
     nodeNumberOfChains: int
     nodeVersion: str
 
-blocks:list[Block] = []
-block_nodes:set[str] = set()
-block_relationships = []
-transactions = []
-transaction_nodes:set[str] = set()
-address_nodes:set[str] = set()
-transaction_relationships = []
+
+blocks: list[Block] = []
+block_nodes: set[str] = set()
+block_relationships: list[tuple[Block, Block]] = []
+transactions: list[Transaction] = []
+transaction_nodes: set[str] = set()
+address_nodes: set[str] = set()
 transaction_block_relationships = []
 all_relationships = []
 
+
+def make_block_id(block: Block):
+    block_chain_id = block.chainId
+    block_height = block.height
+    return f"C:{block_chain_id}-H:{block_height}"
+
+
+def make_block_label(block: Block):
+    label_string = f"""
+        Chain: {block.chainId}
+        Height: {block.height}
+        Hash: {block.hash}
+        Creation Time: {block.creationTime}
+        Tx Qty: {block.totalTransactions}
+        Displayed Tx Qty: {len(block.transactions)}
+        """
+    return label_string
+
+
+def make_tx_label(tx: Transaction):
+    label_string = f"""
+        Chain: {tx.chainId}
+        Request Key: {tx.requestKey}
+        Creation Time: {tx.timestamp}
+        From: {tx.fromAccount}
+        To: {tx.toAccount}
+        Status: {tx.status}
+        """
+    return label_string
+
+
+def make_tx_id(tx: Transaction):
+    tx_chain_id = tx.chainId
+    tx_status = tx.status
+    return f"{tx_chain_id}-{tx_status}"
+
+
+def add_tx_to_block(tx: Transaction):
+    # TODO break up this function
+    wanted_chain_id = tx.chainId
+    wanted_time = tx.timestamp
+    filtered_blocks = filter(
+        lambda b: b.chainId == wanted_chain_id and b.creationTime <= wanted_time, blocks
+    )
+    filtered_blocks_list = list(filtered_blocks)
+    if len(filtered_blocks_list) == 1:
+        tx_block = filtered_blocks_list[0]
+    elif len(filtered_blocks_list) > 1:
+        tx_block = sorted(filtered_blocks_list, key=lambda block: block.creationTime)[
+            -1
+        ]
+    else:
+        tx_block = None
+    if tx_block:  # and len(tx_block.transactions) < 8:
+        tx.tx_id = f"{tx_block.block_id}-Tx:{len(tx_block.transactions)}"
+        tx_block.transactions.append(tx)
+        transactions.append(tx)
+
+
+def create_block_to_block_relationship(block_1: Block, block_2: Block):
+    ...
+
+
+def create_block_to_tx_relationship(block: Block, tx: Transaction):
+    ...
+
+
+def get_block_by_chain_and_height(chain_id: int, block_height: int):
+    filtered_blocks = filter(
+        lambda b: b.chainId == chain_id and b.height == block_height, blocks
+    )
+    filtered_blocks_list = list(filtered_blocks)
+    block = filtered_blocks_list[0] if len(filtered_blocks_list) == 1 else None
+    return block
+
+
+def generate_neighbor_chain_ids(chain_id: int):
+    for neighbor_id in node_structure.nodeGraphHistory[-1][-1][chain_id][-1]:
+        yield neighbor_id
+
+
+def generate_neighbor_blocks(block: Block):
+    for neighbor_id in generate_neighbor_chain_ids(block.chainId):
+        neighbor_block = get_block_by_chain_and_height(neighbor_id, block.height)
+        if neighbor_block:
+            yield neighbor_block
+
+
+def handle_block(block: Block):
+    block.block_id = make_block_id(block)
+    blocks.append(block)
+
+
+def handle_tx(ws: websocket.WebSocketApp, tx: Transaction):
+    add_tx_to_block(tx)
+
+
+def generate_nodes():
+    for block in blocks:
+        for neighbor_block in generate_neighbor_blocks(block):
+            block.has_live_neighbors = True
+        if not block.has_live_neighbors:
+            previous_block = get_block_by_chain_and_height(
+                block.chainId, block.height - 1
+            )
+            if previous_block:
+                block.has_live_neighbors = True
+        block_title = make_block_label(block)
+        for tx in block.transactions:
+            tx_title = make_tx_label(tx)
+            tx_label = tx.tx_id.split(":")[-1]
+            if block.has_live_neighbors:
+                yield {"id": tx.tx_id, "title": tx_title, "size": 5, "label": tx_label}
+        if block.has_live_neighbors:
+            block_size = 10 if block.totalTransactions < 10 else block.totalTransactions
+            yield {
+                "id": block.block_id,
+                "title": block_title,
+                "size": block_size,
+                "label": f"B-{block.chainId}",
+            }
+
+
+def generate_edges():
+    for block in blocks:
+        if block.has_live_neighbors:
+            for neighbor_block in generate_neighbor_blocks(block):
+                neighbor_id = neighbor_block.block_id
+                yield {
+                    "source": block.block_id,
+                    "to": neighbor_id,
+                    "title": "Block Neighbors",
+                    "label": "",
+                    "hidden": True,
+                }
+            for tx in block.transactions:
+                yield {
+                    "source": block.block_id,
+                    "to": tx.tx_id,
+                    "title": "Block Transactions",
+                    "label": "",
+                    "hidden": True,
+                }
+        previous_block = get_block_by_chain_and_height(block.chainId, block.height - 1)
+        if previous_block:
+            yield {
+                "source": previous_block.block_id,
+                "to": block.block_id,
+                "title": "Previous Block Connection",
+                "label": "",
+                "hidden":True
+            }
+
+
 def create_networkx_graph():
-    print("creating graph")
-    [all_relationships.append(i) for i in block_relationships]
-    [all_relationships.append(i) for i in transaction_relationships]
-    [all_relationships.append(i) for i in transaction_block_relationships]
-    net = Network()
-    for node in block_nodes:
-        net.add_node(node, title="Block",size=10, color="#f0a30a")
-    for node in transaction_nodes:
-        net.add_node(node, title="Transaction", label="", size=5, color="#f2a30a")
-    for relationship in block_relationships:
-        net.add_edge(relationship[0], relationship[1], title="Block Relationship", label="")
-    for relationship in transaction_block_relationships:
-        net.add_edge(relationship[0], relationship[1], title="tx block relationship", label="")
-    #net.set_options(net_options)
+    G = nx.Graph()
+    # net = Network(bgcolor="#2222", font_color="white")
+
+    for node in generate_nodes():
+        node_id = node.pop("id")
+        node_label = node.pop("label")
+        if not node_label:
+            node_label = ""
+        G.add_node(node_id, label=node_label, **node)
+        # net.add_node(node_id, label=node_label, **node)
+    for edge in generate_edges():
+        source = edge.pop("source")
+        to = edge.pop("to")
+        G.add_edge(source, to, **edge)
+    degree = nx.degree_centrality(G)
+    nx.set_node_attributes(G, degree, "degree_centrality")
+    between = nx.betweenness_centrality(G)
+    nx.set_node_attributes(G, between, "betweenness_centrality")
+    communities = community_louvain.best_partition(G)
+    nx.set_node_attributes(G, communities, "group")
+    net = Network(bgcolor="#222222", font_color="white")
+    net.from_nx(G)
     net.show("kadena.html", notebook=False)
+
 
 def get_chainweb_info():
     r = requests.get(chainweb_node_structure_url).json()
     return ChainWebInfo(**r)
 
+
 def get_and_handle_recent_blocks():
-    url = "https://backend2.euclabs.net/kadena-indexer-v2/v2/recent-blocks?pageId=0&pageSize=20"
-    r:list[dict] = requests.get(url).json()
-    for block_data in r:
-        block_data.update({"creationTime":block_data.get("timestamp")})
-    [handle_block(Block(**block_data)) for block_data in r]
+    url = "https://backend2.euclabs.net/kadena-indexer-v2/v2/recent-blocks?pageId=0&pageSize=50"
+    response: list[dict] = requests.get(url).json()
+    for block_data in response:
+        block_data.update({"creationTime": block_data.get("timestamp")})
+    [handle_block(Block(**block_data)) for block_data in response]
 
-def handle_block(block_data: Block):
-    block_nodes.add(block_data.hash)
-    blocks.append(block_data)
-    desired_chainId = block_data.chainId
-    creationTime = block_data.creationTime
-    wanted_height = block_data.height-1
-    filtered_blocks = filter(lambda b: b.chainId == desired_chainId and b.height == wanted_height, blocks)
-    # If you want to use the blocks as a list again
-    filtered_blocks_list = list(filtered_blocks)
-    if len(filtered_blocks_list) > 0:
-        previous_block = sorted(filtered_blocks_list, key=lambda block: block.creationTime)[-1]
-        block_relationships.append((block_data.hash,previous_block.hash))
-    
-    chain_ids = node_structure.nodeGraphHistory[-1][-1][desired_chainId]
-    wanted_height = block_data.height
-    for wanted_chain_id in chain_ids[-1]:
-        filtered_blocks = filter(lambda b: b.chainId == wanted_chain_id and b.height == wanted_height, blocks)
-        filtered_blocks_list = list(filtered_blocks)
-        if len(filtered_blocks_list) > 0:
-            previous_block = filtered_blocks_list[-1]
-            print(previous_block.hash, block_data.hash)
-            block_relationships.append((block_data.hash,previous_block.hash))
-    
-    
 
-def handle_tx(ws:websocket.WebSocketApp, tx_data: Transaction):
-    transaction_nodes.add(tx_data.requestKey)
-    desired_chainId = tx_data.chainId
-    creationTime = tx_data.timestamp
-    address_nodes.add(tx_data.toAccount)
-    address_nodes.add(tx_data.fromAccount)
-    filtered_blocks = filter(lambda b: b.chainId == desired_chainId and b.creationTime == creationTime, blocks)
-    # If you want to use the blocks as a list again
-    filtered_blocks_list = list(filtered_blocks)
-    related_block = filtered_blocks_list[0] if len(filtered_blocks_list) == 1 else None
-    if related_block:
-        print(tx_data)
-        print(related_block)
-        transaction_block_relationships.append((tx_data.requestKey,related_block.hash))
 def on_message(ws: websocket.WebSocketApp, message):
     ...
 
@@ -127,30 +257,29 @@ def on_content_message(ws: websocket.WebSocketApp, message):
     ...
 
 
-
 def on_data(ws: websocket.WebSocketApp, data1: str, data2, data3):
     json_data_str = data1.split("\n\n")[-1].replace("\x00", "")
     if json_data_str.startswith("{") and json_data_str.endswith("}"):
         json_data: dict[str, Any] = json.loads(json_data_str)
         if sorted(json_data.keys()) == sorted(tx_keys):
-            #handle_tx(ws,Transaction(**json_data))
-            pass
+            handle_tx(ws, Transaction(**json_data))
         elif sorted(json_data.keys()) == sorted(block_keys):
-            #handle_block(Block(**json_data))
             handle_block(Block(**json_data))
         else:
-            print(json_data)
             with open("new_data_schema_found.json", "w") as fp:
                 json.dump(json_data, fp)
-            ws.close(100, "new data found")
+
+        new_len = len(transactions)
+        if new_len >= max_nodes:
+            ws.close()
 
 
 def on_error(ws: websocket.WebSocketApp, error):
-    ...
+    print("error", error)
 
 
 def on_close(ws: websocket.WebSocketApp, close_status_code, close_msg):
-    ...
+    print("closing websocket")
 
 
 def on_open(ws: websocket.WebSocketApp):
@@ -176,7 +305,13 @@ def on_open(ws: websocket.WebSocketApp):
 
 if __name__ == "__main__":
     node_structure = get_chainweb_info()
-    node_structure.nodeGraphHistory = sorted([[chain_id, sorted(graph)] for chain_id, graph in node_structure.nodeGraphHistory])
+    node_structure.nodeGraphHistory = sorted(
+        [
+            [chain_id, sorted(graph)]
+            for chain_id, graph in node_structure.nodeGraphHistory
+        ]
+    )
+    print("getting blocks")
     get_and_handle_recent_blocks()
     websocket.enableTrace(False)
     ws = websocket.WebSocketApp(
@@ -188,6 +323,7 @@ if __name__ == "__main__":
         on_cont_message=on_content_message,
         on_data=on_data,
     )
-
+    print("running ws")
     ws.run_forever()
+    print("creating graph")
     create_networkx_graph()
