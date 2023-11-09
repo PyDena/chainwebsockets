@@ -16,7 +16,7 @@ from random import choice
 chainweb_node_structure_url = "https://estats.chainweb.com/info"
 block_keys = ["height", "hash", "chainId", "totalTransactions", "creationTime"]
 tx_keys = ["requestKey", "chainId", "status", "timestamp", "fromAccount", "toAccount"]
-max_nodes = 5000
+max_nodes =300
 
 
 class Transaction(BaseModel):
