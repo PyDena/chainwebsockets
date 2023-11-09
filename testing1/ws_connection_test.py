@@ -12,10 +12,11 @@ from pydantic import BaseModel
 import community as community_louvain
 import os
 from random import choice
+
 chainweb_node_structure_url = "https://estats.chainweb.com/info"
 block_keys = ["height", "hash", "chainId", "totalTransactions", "creationTime"]
 tx_keys = ["requestKey", "chainId", "status", "timestamp", "fromAccount", "toAccount"]
-max_nodes = 30
+max_nodes = 5000
 
 
 class Transaction(BaseModel):
@@ -56,9 +57,15 @@ transaction_nodes: set[str] = set()
 address_nodes: set[str] = set()
 transaction_block_relationships = []
 all_relationships = []
-node_image_dir = "testing1\\images"
-node_image_paths = [os.path.abspath(os.path.join(node_image_dir, image_name)) for image_name in os.path.join(node_image_dir)]
+file_path = os.path.abspath(__file__)
+file_name = os.path.basename(file_path)
+testing_dir = file_path.replace(file_name, "")
+node_img_dir = os.path.join(testing_dir, "images")
 
+node_image_paths = ["file:///"+os.path.abspath(os.path.join(node_img_dir, image_name)) for image_name in os.listdir(node_img_dir) if 'block' in image_name.lower()]
+tx_node_image_paths = ["file:///"+os.path.abspath(os.path.join(node_img_dir, image_name)) for image_name in os.listdir(node_img_dir) if 'coin' in image_name.lower()]
+
+print(node_image_paths)
 def make_block_id(block: Block):
     block_chain_id = block.chainId
     block_height = block.height
@@ -100,7 +107,7 @@ def add_tx_to_block(tx: Transaction):
     wanted_chain_id = tx.chainId
     wanted_time = tx.timestamp
     filtered_blocks = filter(
-        lambda b: b.chainId == wanted_chain_id and b.creationTime <= wanted_time, blocks
+        lambda b: b.chainId == wanted_chain_id, blocks
     )
     filtered_blocks_list = list(filtered_blocks)
     if len(filtered_blocks_list) == 1:
@@ -115,7 +122,6 @@ def add_tx_to_block(tx: Transaction):
         tx.tx_id = f"{tx_block.block_id}-Tx:{len(tx_block.transactions)}"
         tx_block.transactions.append(tx)
         transactions.append(tx)
-
 
 def create_block_to_block_relationship(block_1: Block, block_2: Block):
     ...
@@ -167,17 +173,18 @@ def generate_nodes():
                 block.has_live_neighbors = True
         block_title = make_block_label(block)
         for tx in block.transactions:
+            img_path = choice(tx_node_image_paths)
             tx_title = make_tx_label(tx)
             tx_label = tx.tx_id.split(":")[-1]
             if block.has_live_neighbors:
-                yield {"id": tx.tx_id, "title": tx_title, "size": 5, "label": tx_label}
+                yield {"id": tx.tx_id, "title": tx_title, "size":15, "label": tx_label, "image":img_path, "shape":"image"}
         #if block.has_live_neighbors:
         block_size = 10 if block.totalTransactions < 10 else block.totalTransactions
         img_path = choice(node_image_paths)
         yield {
             "id": block.block_id,
             "title": block_title,
-            "size": block_size,
+            "size": 25,
             "label": f"B-{block.chainId}",
             "image":img_path,
             "shape":'image'
@@ -221,19 +228,35 @@ def create_networkx_graph():
         node_label = node.pop("label")
         if not node_label:
             node_label = ""
-        G.add_node(node_id, label=node_label, **node)
+        try:
+            image = node.pop("image")
+            shape = node.pop("shape")
+        except:
+            image, shape = None, None
+        if image and shape:
+            G.add_node(node_id, label=node_label, image=image, shape=shape, **node)
+        else:
+            G.add_node(node_id, label=node_label, **node)
+        #G.add_node(node_id, label=node_label, image=image, shape=shape, **node)
         # net.add_node(node_id, label=node_label, **node)
     for edge in generate_edges():
         source = edge.pop("source")
         to = edge.pop("to")
         G.add_edge(source, to, **edge)
+    
     degree = nx.degree_centrality(G)
     nx.set_node_attributes(G, degree, "degree_centrality")
     between = nx.betweenness_centrality(G)
     nx.set_node_attributes(G, between, "betweenness_centrality")
     communities = community_louvain.best_partition(G)
     nx.set_node_attributes(G, communities, "group")
-    net = Network(bgcolor="#222222", font_color="white")
+    
+    net = Network(bgcolor="#000000", font_color="pink")
+    
+    net.options.physics.enabled = False
+    net.height = "1300px"
+    net.width = "100%"
+    net.show_buttons(filter_=True)
     net.from_nx(G)
     net.show("kadena.html", notebook=False)
 
@@ -260,6 +283,7 @@ def on_content_message(ws: websocket.WebSocketApp, message):
 
 
 def on_data(ws: websocket.WebSocketApp, data1: str, data2, data3):
+    old_tx_count = len(transactions)
     json_data_str = data1.split("\n\n")[-1].replace("\x00", "")
     if json_data_str.startswith("{") and json_data_str.endswith("}"):
         json_data: dict[str, Any] = json.loads(json_data_str)
@@ -272,9 +296,10 @@ def on_data(ws: websocket.WebSocketApp, data1: str, data2, data3):
                 json.dump(json_data, fp)
 
         new_len = len(transactions)
-        
-        if new_len >= max_nodes:
-            ws.close()
+        if old_tx_count != new_len:
+            print("Transactions ", new_len)
+            if new_len >= max_nodes:
+                ws.close()
 
 
 def on_error(ws: websocket.WebSocketApp, error):
