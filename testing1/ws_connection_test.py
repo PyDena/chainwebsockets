@@ -10,11 +10,12 @@ from matplotlib import pyplot as plt
 from pyvis.network import Network
 from pydantic import BaseModel
 import community as community_louvain
-
+import os
+from random import choice
 chainweb_node_structure_url = "https://estats.chainweb.com/info"
 block_keys = ["height", "hash", "chainId", "totalTransactions", "creationTime"]
 tx_keys = ["requestKey", "chainId", "status", "timestamp", "fromAccount", "toAccount"]
-max_nodes = 50000
+max_nodes = 30
 
 
 class Transaction(BaseModel):
@@ -55,7 +56,8 @@ transaction_nodes: set[str] = set()
 address_nodes: set[str] = set()
 transaction_block_relationships = []
 all_relationships = []
-
+node_image_dir = "testing1\\images"
+node_image_paths = [os.path.abspath(os.path.join(node_image_dir, image_name)) for image_name in os.path.join(node_image_dir)]
 
 def make_block_id(block: Block):
     block_chain_id = block.chainId
@@ -169,14 +171,17 @@ def generate_nodes():
             tx_label = tx.tx_id.split(":")[-1]
             if block.has_live_neighbors:
                 yield {"id": tx.tx_id, "title": tx_title, "size": 5, "label": tx_label}
-        if block.has_live_neighbors:
-            block_size = 10 if block.totalTransactions < 10 else block.totalTransactions
-            yield {
-                "id": block.block_id,
-                "title": block_title,
-                "size": block_size,
-                "label": f"B-{block.chainId}",
-            }
+        #if block.has_live_neighbors:
+        block_size = 10 if block.totalTransactions < 10 else block.totalTransactions
+        img_path = choice(node_image_paths)
+        yield {
+            "id": block.block_id,
+            "title": block_title,
+            "size": block_size,
+            "label": f"B-{block.chainId}",
+            "image":img_path,
+            "shape":'image'
+        }
 
 
 def generate_edges():
@@ -189,7 +194,6 @@ def generate_edges():
                     "to": neighbor_id,
                     "title": "Block Neighbors",
                     "label": "",
-                    "hidden": True,
                 }
             for tx in block.transactions:
                 yield {
@@ -197,7 +201,6 @@ def generate_edges():
                     "to": tx.tx_id,
                     "title": "Block Transactions",
                     "label": "",
-                    "hidden": True,
                 }
         previous_block = get_block_by_chain_and_height(block.chainId, block.height - 1)
         if previous_block:
@@ -206,7 +209,6 @@ def generate_edges():
                 "to": block.block_id,
                 "title": "Previous Block Connection",
                 "label": "",
-                "hidden":True
             }
 
 
@@ -270,6 +272,7 @@ def on_data(ws: websocket.WebSocketApp, data1: str, data2, data3):
                 json.dump(json_data, fp)
 
         new_len = len(transactions)
+        
         if new_len >= max_nodes:
             ws.close()
 
