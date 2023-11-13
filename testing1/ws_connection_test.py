@@ -16,7 +16,7 @@ from random import choice
 chainweb_node_structure_url = "https://estats.chainweb.com/info"
 block_keys = ["height", "hash", "chainId", "totalTransactions", "creationTime"]
 tx_keys = ["requestKey", "chainId", "status", "timestamp", "fromAccount", "toAccount"]
-max_nodes =300
+max_nodes = 5000
 
 
 class Transaction(BaseModel):
@@ -251,10 +251,10 @@ def create_networkx_graph():
     communities = community_louvain.best_partition(G)
     nx.set_node_attributes(G, communities, "group")
     
-    net = Network(bgcolor="#000000", font_color="pink")
+    net = Network(height="1700px", bgcolor="#000000", font_color="pink")
     
     net.options.physics.enabled = False
-    net.height = "1300px"
+    net.height = "1700px"
     net.width = "100%"
     net.show_buttons(filter_=True)
     net.from_nx(G)
@@ -267,11 +267,18 @@ def get_chainweb_info():
 
 
 def get_and_handle_recent_blocks():
-    url = "https://backend2.euclabs.net/kadena-indexer-v2/v2/recent-blocks?pageId=0&pageSize=50"
-    response: list[dict] = requests.get(url).json()
-    for block_data in response:
-        block_data.update({"creationTime": block_data.get("timestamp")})
-    [handle_block(Block(**block_data)) for block_data in response]
+    url = "https://backend2.euclabs.net/kadena-indexer-v2/v2/recent-blocks?pageId=0&pageSize=20"
+    url = "https://backend2.euclabs.net/kadena-indexer/v2/recent-blocks?pageId=0&pageSize=5"
+    response = requests.get(url)
+    if response.status_code == 200:
+        response_json = response.json()
+        for block_data in response_json:
+            block_data.update({"creationTime": block_data.get("timestamp")})
+        [handle_block(Block(**block_data)) for block_data in response_json]
+    else:
+        print("incorrect response", response.status_code)
+        exit()
+    
 
 
 def on_message(ws: websocket.WebSocketApp, message):
@@ -343,7 +350,7 @@ if __name__ == "__main__":
     get_and_handle_recent_blocks()
     websocket.enableTrace(False)
     ws = websocket.WebSocketApp(
-        "wss://backend2.euclabs.net/kadena-indexer-v2-websockets",
+        "wss://backend2.euclabs.net/kadena-indexer-websockets",
         on_open=on_open,
         on_message=on_message,
         on_error=on_error,
