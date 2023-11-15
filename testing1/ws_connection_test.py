@@ -16,7 +16,7 @@ from random import choice
 chainweb_node_structure_url = "https://estats.chainweb.com/info"
 block_keys = ["height", "hash", "chainId", "totalTransactions", "creationTime"]
 tx_keys = ["requestKey", "chainId", "status", "timestamp", "fromAccount", "toAccount"]
-max_nodes = 5000
+max_nodes = 20
 
 
 class Transaction(BaseModel):
@@ -245,9 +245,9 @@ def create_networkx_graph():
         G.add_edge(source, to, **edge)
     
     degree = nx.degree_centrality(G)
-    nx.set_node_attributes(G, degree, "degree_centrality")
+    #nx.set_node_attributes(G, degree, "degree_centrality")
     between = nx.betweenness_centrality(G)
-    nx.set_node_attributes(G, between, "betweenness_centrality")
+    #nx.set_node_attributes(G, between, "betweenness_centrality")
     communities = community_louvain.best_partition(G)
     nx.set_node_attributes(G, communities, "group")
     

@@ -59,3 +59,7 @@ def start_socket():
         on_data=on_data,
     )
     ws.run_forever()
+
+if __name__ == "__main__":
+    start_socket()
+
