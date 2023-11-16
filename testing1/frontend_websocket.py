@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel
 import os
 import requests
-
+from random import randint, choice, uniform
 
 block_keys = ["height", "hash", "chainId", "totalTransactions", "creationTime"]
 tx_keys = ["requestKey", "chainId", "status", "timestamp", "fromAccount", "toAccount"]
@@ -56,6 +56,7 @@ class Block(BaseModel):
     has_relationships:bool = False
     relationships:list[str] = []
     ts:int|None = None
+    size:int = 20
 
 class Node(BaseModel):
     ts:int
@@ -63,6 +64,7 @@ class Node(BaseModel):
     group:int
     has_relationships:bool
     relationships:list[str]
+    size:int
 
 
 blocks:list[Block] = []
@@ -102,12 +104,6 @@ def generate_neighbor_chain_ids(chain_id: int):
         yield neighbor_id
 
 def prepare_websocket_data(data:dict):
-    if len(all_blocks_and_transactions) >= 500:
-        if isinstance(all_blocks_and_transactions[0], Block):
-            del blocks[0]
-        else:
-            del transactions[0]
-        del all_blocks_and_transactions[0]
     if sorted(data.keys()) == sorted(block_keys):
         block = Block(**data)
         block.group = block.chainId
@@ -124,19 +120,22 @@ def prepare_websocket_data(data:dict):
             block.has_relationships = True
         blocks.append(block)
         all_blocks_and_transactions.append(block)
-        return Node(**block.model_dump()).model_dump()         
+        block_transactions = block.totalTransactions
+        '''for tx_num in range(0, randint(5, 50)):
+            tx_ts = block.ts
+            tx_id = f"{block.id}-tx-{tx_num}"
+            tx_group = block.group
+            tx_relationships = [block.id]
+            tx_has_relationships = True
+            tx_node = Node(ts=tx_ts, id=tx_id, group=tx_group, has_relationships=tx_has_relationships, relationships=tx_relationships)
+            yield tx_node.model_dump()'''
+        if block_transactions > 20:
+            block.size = block_transactions
+        yield Node(**block.model_dump()).model_dump()
+    
+             
     elif sorted(data.keys()) == sorted(tx_keys):
-        tx = Transaction(**data)
-        tx.group = tx.chainId
-        tx.ts = tx.timestamp
-        tx.id = f"Tx {tx.chainId}-{tx.requestKey}"
-        tx_block = get_latest_block(tx.chainId, tx.timestamp)
-        if tx_block:
-            tx.has_relationships = True
-            tx.relationships.append(tx_block.id)
-        transactions.append(tx)
-        all_blocks_and_transactions.append(tx)
-        return Node(**tx.model_dump()).model_dump()
+        ...
     else:
         ...
 
@@ -157,9 +156,13 @@ class WebSocketManager:
     async def send_personal_message(self, message: str, websocket: WebSocket):
         await websocket.send_text(message)
 
-    async def broadcast(self, message: str):
+    async def broadcast(self, message: str|list|dict):
         for connection_id, connection_messages in self.connection_messages.items():
-            connection_messages.append(message)
+            if isinstance(message, str) or isinstance(message, dict):
+                connection_messages.append(message)
+            elif isinstance(message, list):
+                for each_message in message:
+                    connection_messages.append(each_message)
             self.connection_messages.update({connection_id:connection_messages})
 
     async def broadcast_data(self, data: dict):
@@ -167,9 +170,10 @@ class WebSocketManager:
             await connection.send_json(data)
 
     async def get_message(self, connection_id:str):
-        messages = self.connection_messages.get(connection_id)
+        for message in self.connection_messages.get(connection_id):
+            yield message
         self.connection_messages.update({connection_id:[]})
-        return messages
+        
     
 class MyWebSocketApp:
     def __init__(self, url, manager: WebSocketManager):
@@ -202,8 +206,7 @@ class MyWebSocketApp:
         json_data_str = message.split("\n\n")[-1].replace("\x00", "")
         if json_data_str.startswith("{") and json_data_str.endswith("}"):
             json_data: dict[str, Any] = json.loads(json_data_str)
-            new_block_data = prepare_websocket_data(json_data)
-            if new_block_data:
+            for new_block_data in prepare_websocket_data(json_data):
                 asyncio.run(self.manager.broadcast(new_block_data))
                 
     def start_up(self):
@@ -229,7 +232,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket, id)
     try:
         while True:
-            for message in await manager.get_message(id):
+            async for message in manager.get_message(id):
                 await websocket.send_json(message)
     except Exception as e:
         print(f"Error: {e}")

@@ -21,7 +21,7 @@
         </center>
         <style type="text/css">
              #mynetwork {
-                 width: 100%;
+                 width: 75%;
                  height: 1700px;
                  background-color: #000000;
                  border: 1px solid lightgray;
@@ -128,9 +128,10 @@
                             const eventRelationships = eventData.relationships;
                             const eventGroup = eventData.group;
                             const ts = eventData.ts;
+                            const eventsize = eventData.size;
                         
                             if (eventId) {
-                                nodes.add({id: eventId, group:eventGroup, ts:ts});
+                                nodes.add({id: eventId, group:eventGroup, ts:ts, size:eventsize});
                                 if (hasRelationships) {
                                     eventRelationships.forEach(function(relationship_item) {
                                         edges.add({'from': eventId, 'to': relationship_item});
